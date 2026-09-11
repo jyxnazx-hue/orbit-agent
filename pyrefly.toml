@@ -1,4 +1,1 @@
-[environment]
-python = "venv/Scripts/python.exe"
-site_packages = ["venv/Lib/site-packages"]
-
+python-interpreter-path = "venv/Scripts/python.exe"

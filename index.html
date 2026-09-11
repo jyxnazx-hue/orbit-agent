@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Orbit — Multi-Agent Ambient Voice Orchestrator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.08); opacity: 0.3; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+    .mic-active {
+      animation: pulse-ring 1.5s infinite ease-in-out;
+      border-color: #10b981 !important;
+    }
+  </style>
+</head>
+<body class="bg-neutral-950 text-neutral-100 min-h-screen flex flex-col font-sans selection:bg-neutral-800">
+  
+  <header class="border-b border-neutral-800/80 px-8 py-5 flex items-center justify-between">
+    <div class="flex items-center space-x-3">
+      <div class="w-3 h-3 rounded-full bg-emerald-500 shadow-[0_0_10px_#10b981]"></div>
+      <span class="font-semibold tracking-wider text-sm uppercase text-neutral-300">Orbit Engine</span>
+    </div>
+    <div class="text-xs text-neutral-500 font-mono">Strands Multi-Agent • Guardrails Active</div>
+  </header>
+
+  <main class="flex-1 max-w-3xl w-full mx-auto px-6 py-10 flex flex-col items-center">
+    <!-- Mic Controller -->
+    <div class="text-center mb-8">
+      <button id="micBtn" type="button" class="w-20 h-20 rounded-full bg-neutral-900 border border-neutral-700 hover:border-emerald-500 flex items-center justify-center transition-all shadow-lg">
+        <svg class="w-7 h-7 text-neutral-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 02-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
+        </svg>
+      </button>
+      <p id="micStatus" class="text-xs text-neutral-500 mt-3 font-mono">Tap mic or enter unstructured thoughts</p>
+    </div>
+
+    <!-- Input Box -->
+    <div class="w-full relative mb-8">
+      <textarea id="promptInput" rows="3" class="w-full bg-neutral-900/60 border border-neutral-800 rounded-xl px-4 py-3 text-sm text-neutral-200 placeholder-neutral-600 focus:outline-none focus:border-neutral-600 resize-none" placeholder="e.g. Schedule HAI design review next Tuesday 2pm, queue Paxos lecture on YouTube, or cancel tomorrow's sync..."></textarea>
+      <button id="runBtn" type="button" class="absolute right-3 bottom-4 px-4 py-1.5 bg-neutral-100 text-neutral-950 font-medium text-xs rounded-lg hover:bg-neutral-300 transition">Route</button>
+    </div>
+
+    <!-- Human In The Loop Confirmation Intercept -->
+    <div id="hitlCard" class="w-full mb-6 p-4 bg-amber-950/40 border border-amber-800/80 rounded-xl hidden">
+      <div class="flex items-start space-x-3">
+        <span class="text-amber-400 text-lg">⚠️</span>
+        <div class="flex-1">
+          <div class="text-xs font-mono text-amber-400 uppercase tracking-wider mb-1">Human Check Required</div>
+          <p id="hitlPrompt" class="text-sm text-neutral-200 mb-3"></p>
+          <div class="flex space-x-3">
+            <button id="confirmBtn" type="button" class="px-3 py-1 bg-amber-500 text-neutral-950 font-medium text-xs rounded hover:bg-amber-400 transition">Confirm Action</button>
+            <button id="cancelBtn" type="button" class="px-3 py-1 bg-neutral-800 text-neutral-400 text-xs rounded hover:bg-neutral-700 transition">Dismiss</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Output Section -->
+    <div id="outputSection" class="w-full space-y-4 hidden">
+      <div class="p-4 bg-neutral-900/40 border border-neutral-800 rounded-xl">
+        <div class="text-xs font-mono text-neutral-500 uppercase tracking-wider mb-1">Orbit Supervisor</div>
+        <div id="spokenResponse" class="text-sm text-neutral-300"></div>
+      </div>
+
+      <div class="space-y-2">
+        <div class="text-xs font-mono text-neutral-500 uppercase tracking-wider">Delegated Execution Cards</div>
+        <div id="cardsList" class="grid grid-cols-1 gap-2.5"></div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const micBtn = document.getElementById("micBtn");
+    const micStatus = document.getElementById("micStatus");
+    const promptInput = document.getElementById("promptInput");
+    const runBtn = document.getElementById("runBtn");
+    const outputSection = document.getElementById("outputSection");
+    const spokenResponse = document.getElementById("spokenResponse");
+    const cardsList = document.getElementById("cardsList");
+    const hitlCard = document.getElementById("hitlCard");
+    const hitlPrompt = document.getElementById("hitlPrompt");
+    const confirmBtn = document.getElementById("confirmBtn");
+    const cancelBtn = document.getElementById("cancelBtn");
+
+    let pendingAction = null;
+    let availableVoices = [];
+
+    // Pre-cache available voices safely
+    function loadVoices() {
+      if ("speechSynthesis" in window) {
+        availableVoices = window.speechSynthesis.getVoices();
+      }
+    }
+    loadVoices();
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+
+    // Natural voice player
+    function speak(text) {
+      if (!("speechSynthesis" in window) || !text) return;
+      window.speechSynthesis.cancel();
+
+      const utter = new SpeechSynthesisUtterance(text);
+      if (availableVoices.length === 0) {
+        availableVoices = window.speechSynthesis.getVoices();
+      }
+
+      // Priority list for smoother voices
+      const preferred = availableVoices.find(v => 
+        v.name.includes("Natural") || 
+        v.name.includes("Google US English") || 
+        v.name.includes("Jenny") || 
+        v.name.includes("Zira") ||
+        v.lang === "en-US"
+      );
+
+      if (preferred) utter.voice = preferred;
+      utter.rate = 1.0;
+      utter.pitch = 1.0;
+      window.speechSynthesis.speak(utter);
+    }
+
+    // Speech-to-Text Microphone
+    let recognition = null;
+    const SpeechAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (SpeechAPI) {
+      recognition = new SpeechAPI();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = "en-US";
+
+      recognition.onstart = () => {
+        micStatus.innerText = "Listening...";
+        micBtn.classList.add("mic-active");
+      };
+
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        promptInput.value = transcript;
+        micStatus.innerText = "Captured audio";
+        micBtn.classList.remove("mic-active");
+        submitQuery(false);
+      };
+
+      recognition.onerror = () => {
+        micStatus.innerText = "Mic error or denied";
+        micBtn.classList.remove("mic-active");
+      };
+
+      recognition.onend = () => {
+        micBtn.classList.remove("mic-active");
+        if (micStatus.innerText === "Listening...") {
+          micStatus.innerText = "Tap mic or enter unstructured thoughts";
+        }
+      };
+
+      micBtn.onclick = () => {
+        try {
+          recognition.start();
+        } catch (e) {
+          recognition.stop();
+        }
+      };
+    } else {
+      micStatus.innerText = "Speech input not supported in this browser (use Chrome/Edge)";
+      micBtn.onclick = () => alert("Web Speech API not supported in this browser. Please use Chrome or Edge.");
+    }
+
+    // Buttons
+    runBtn.onclick = () => submitQuery(false);
+
+    confirmBtn.onclick = () => {
+      hitlCard.classList.add("hidden");
+      submitQuery(true);
+    };
+
+    cancelBtn.onclick = () => {
+      hitlCard.classList.add("hidden");
+      pendingAction = null;
+      speak("Action cancelled.");
+    };
+
+    // Primary Dispatch Function
+    async function submitQuery(isConfirmed) {
+      const query = promptInput.value.trim();
+      if (!query) return;
+
+      runBtn.innerText = "Routing...";
+      runBtn.disabled = true;
+
+      try {
+        const payload = {
+          query: query,
+          confirmed: isConfirmed,
+          pending_tool: pendingAction ? pendingAction.tool : null,
+          pending_args: pendingAction ? pendingAction.args : null
+        };
+
+        const res = await fetch("http://127.0.0.1:8000/api/command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) {
+          throw new Error(`Server returned ${res.status}`);
+        }
+
+        const data = await res.json();
+
+        // Speak the response text
+        speak(data.spoken_summary);
+
+        // Guardrail Intercepted
+        if (data.requires_confirmation) {
+          outputSection.classList.add("hidden");
+          hitlCard.classList.remove("hidden");
+          hitlPrompt.innerText = data.spoken_summary || "Please confirm this critical operation.";
+          pendingAction = { tool: data.pending_tool, args: data.pending_args };
+          return;
+        }
+
+        // Standard Success Display
+        hitlCard.classList.add("hidden");
+        outputSection.classList.remove("hidden");
+        spokenResponse.innerText = data.spoken_summary || "Actions processed.";
+        cardsList.innerHTML = "";
+
+        const actions = data.actions_executed || [];
+        actions.forEach(act => {
+          const card = document.createElement("div");
+          card.className = "p-3.5 bg-neutral-900 border border-neutral-800 rounded-lg flex items-center justify-between";
+
+          let link = "#";
+          let label = act.tool || "Action";
+          const inp = act.input || {};
+
+          if (act.tool === "manage_calendar_event") {
+            link = `https://calendar.google.com/calendar/r/eventedit?text=${encodeURIComponent(inp.title || "Event")}`;
+            label = `Google Calendar: ${inp.title || "Event"}`;
+          } else if (act.tool === "search_and_queue_media") {
+            link = `https://www.youtube.com/results?search_query=${encodeURIComponent(inp.query || "")}`;
+            label = `YouTube: ${inp.query || "Media"}`;
+          } else if (act.tool === "save_to_orbit_vault") {
+            label = `Local Vault: ${inp.summary || "Stored Note"}`;
+          }
+
+          card.innerHTML = `
+            <div>
+              <span class="text-xs font-mono text-neutral-500 uppercase block">${act.tool || "SYSTEM"}</span>
+              <span class="text-sm text-neutral-200">${label}</span>
+            </div>
+            ${link !== "#" ? `<a href="${link}" target="_blank" rel="noopener noreferrer" class="text-xs px-2.5 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded border border-neutral-700 transition">Open App ↗</a>` : `<span class="text-xs text-neutral-500 font-mono">Synced Locally</span>`}
+          `;
+          cardsList.appendChild(card);
+        });
+
+      } catch (err) {
+        console.error(err);
+        alert("Failed to connect to Orbit engine at http://127.0.0.1:8000. Make sure 'uvicorn app:app --reload' is running.");
+      } finally {
+        runBtn.innerText = "Route";
+        runBtn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
