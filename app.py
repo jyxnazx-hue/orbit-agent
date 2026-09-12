@@ -1,13 +1,13 @@
 import os
+import shutil
 import sqlite3
+from typing import Dict, Any, Optional
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
 
-from orbit_core import orbit_agent
-from hooks.security_guard import SafetyGuardrailError
+from orbit_agent import orbit_instance
 
 load_dotenv()
 
@@ -21,48 +21,57 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+UPLOAD_DIR = os.path.abspath("./uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 class CommandPayload(BaseModel):
     query: str
     confirmed: bool = False
-    pending_tool: Optional[str] = None
-    pending_args: Optional[Dict[str, Any]] = None
 
 @app.post("/api/command")
-def process_command(payload: CommandPayload):
-    """
-    Ingests voice query, runs safety checks, routes to tools,
-    or halts execution to request user confirmation.
-    """
+async def process_command(payload: CommandPayload):
     try:
-        if os.getenv("USE_MOCK_BEDROCK", "false").lower() == "true":
-            response = orbit_agent(payload.query, user_confirmed=payload.confirmed)
-        else:
-            response = orbit_agent(payload.query)
+        user_input = payload.query
+        if payload.confirmed:
+            user_input = f"User has explicitly confirmed: {payload.query}. Proceed with execution."
 
-        action_cards = []
-        raw_calls = getattr(response, "tool_calls", [])
-        for call in raw_calls:
-            name = call.get("name") if isinstance(call, dict) else getattr(call, "name", "")
-            inp = call.get("input") if isinstance(call, dict) else getattr(call, "input", {})
-            action_cards.append({"tool": name, "input": inp})
+        # Strands agent conversational call
+        agent_response = orbit_instance(user_input)
+        response_text = str(agent_response)
+
+        needs_confirmation = "HITL_PAUSE" in response_text or "Pending Operation" in response_text or "pending your confirmation" in response_text
 
         return {
-            "status": "completed",
-            "spoken_summary": getattr(response, "text", str(response)),
-            "actions_executed": action_cards,
-            "requires_confirmation": False
+            "status": "pending_confirmation" if needs_confirmation else "completed",
+            "spoken_summary": response_text,
+            "requires_confirmation": needs_confirmation
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    except SafetyGuardrailError as sge:
-        # HITL Intercept: Returns question for the user to hear and confirm
+@app.post("/api/upload")
+async def upload_document(file: UploadFile = File(...), note: Optional[str] = Form(None)):
+    try:
+        saved_path = os.path.join(UPLOAD_DIR, file.filename)
+        with open(saved_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        prompt = f"I uploaded a document saved at '{saved_path}'."
+        if note:
+            prompt += f" Context/Instructions: {note}"
+        else:
+            prompt += " Please extract all tasks, schedules, readings, and action items and execute them."
+
+        agent_response = orbit_instance(prompt)
+        response_text = str(agent_response)
+
+        needs_confirmation = "HITL_PAUSE" in response_text or "Pending Operation" in response_text
+
         return {
-            "status": "interrupted",
-            "spoken_summary": sge.args[0],
-            "actions_executed": [],
-            "requires_confirmation": True,
-            "pending_tool": sge.tool_name,
-            "pending_args": sge.payload,
-            "reason": sge.reason
+            "status": "pending_confirmation" if needs_confirmation else "completed",
+            "file": file.filename,
+            "spoken_summary": response_text,
+            "requires_confirmation": needs_confirmation
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -71,7 +80,18 @@ def process_command(payload: CommandPayload):
 def get_vault_entries():
     conn = sqlite3.connect("orbit_vault.db")
     cur = conn.cursor()
-    cur.execute("SELECT id, category, summary, content, created_at FROM vault ORDER BY id DESC")
+    cur.execute("SELECT id, category, title, raw_payload, target_app, status, created_at FROM vault ORDER BY id DESC")
     rows = cur.fetchall()
     conn.close()
-    return [{"id": r[0], "category": r[1], "summary": r[2], "content": r[3], "created_at": r[4]} for r in rows]
+    return [
+        {
+            "id": r[0],
+            "category": r[1],
+            "title": r[2],
+            "payload": r[3],
+            "target_app": r[4],
+            "status": r[5],
+            "created_at": r[6]
+        }
+        for r in rows
+    ]

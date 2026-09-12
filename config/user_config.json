@@ -1,0 +1,23 @@
+{
+  "user_preferences": {
+    "scheduling": "google_calendar",
+    "tasks": "ticktick",
+    "notes": "notion",
+    "shopping": "amazon",
+    "media": "youtube",
+    "research": "google_scholar"
+  },
+  "authorized_apps": [
+    "google_calendar",
+    "youtube",
+    "amazon",
+    "notion",
+    "ticktick",
+    "google_scholar"
+  ],
+  "security_policies": {
+    "require_confirmation_for_purchases": true,
+    "require_confirmation_for_deletions": true,
+    "require_confirmation_on_ambiguity": true
+  }
+}
