@@ -1,11 +1,8 @@
-# Environment
 .venv/
 venv/
 __pycache__/
 *.pyc
 .env
-
-# Local Data (Exclude your vault!)
 orbit_vault.db
 orbit_memory.json
 browser_session/
