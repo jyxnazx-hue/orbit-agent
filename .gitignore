@@ -8,3 +8,4 @@ __pycache__/
 # Local Data (Exclude your vault!)
 orbit_vault.db
 orbit_memory.json
+browser_session/
